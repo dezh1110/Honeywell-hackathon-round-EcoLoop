@@ -1,4 +1,4 @@
-# EcoLoop — Autonomous Building Energy Agent
+# EcoLoop — Autonomous Building Energy Agent (demo video mentioned)
 
 A closed-loop physical-AI system for HVAC optimization: EnergyPlus (real
 building physics) + an open-source LLM (via MCP tools) + a live dashboard,
