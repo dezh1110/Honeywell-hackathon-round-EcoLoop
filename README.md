@@ -91,7 +91,9 @@ built around the "Eco-Loop Building Agents" hackathon spec.
   Then open a second terminal in the same folder and run:
 
  ''' bash
+ 
   ./run.sh exec ollama ollama pull llama3.2:3b
+  
   ./run.sh restart backend
 
   Then open:
