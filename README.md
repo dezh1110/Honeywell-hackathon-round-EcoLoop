@@ -90,16 +90,16 @@ built around the "Eco-Loop Building Agents" hackathon spec.
 
   Then open a second terminal in the same folder and run:
 
- ''' bash
+  ''' bash
  
-  ./run.sh exec ollama ollama pull llama3.2:3b
+   ./run.sh exec ollama ollama pull llama3.2:3b
   
-  ./run.sh restart backend
+   ./run.sh restart backend
 
-  Then open:
-  http://localhost:5173
+   Then open:
+   http://localhost:5173
 
-If step 1 hangs pulling the ollama/ollama:latest image, that's a Docker Hub network issue on your machine, not the project — retry, or restart Docker Desktop and try again.
+ If step 1 hangs pulling the ollama/ollama:latest image, that's a Docker Hub network issue on your machine, not the project — retry, or restart Docker Desktop and try again.
 
 ## What's real vs. what's a documented stand-in
 
