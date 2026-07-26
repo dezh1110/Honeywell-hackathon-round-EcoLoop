@@ -1,0 +1,90 @@
+# Full local stack: OSS LLM (Ollama) -> EcoLoop backend agent (real
+# EnergyPlus by default, baked into the backend image) -> Supabase (cloud,
+# not run locally here) <- React dashboard.
+#
+# The EnergyPlus install itself, and the backend running against it inside
+# this exact Docker build, have both been verified working end-to-end (not
+# just written) -- including finding and fixing two real issues along the
+# way:
+#   1. EnergyPlus's binary links against X11/GL libraries even for headless
+#      use -- backend/Dockerfile installs them explicitly.
+#   2. The published EnergyPlus release used here is x86_64-only. On
+#      Apple Silicon (M1/M2/M3/M4) Docker hosts, `platform: linux/amd64`
+#      below forces the backend to build/run under x86_64 emulation, which
+#      works but is noticeably slower than a native arm64 host. If you're
+#      on an Intel/AMD host, this line is a no-op (that's already your
+#      native platform).
+#
+# Separately: if the LLM reasoning cycle logs
+# `openai.InternalServerError: ... signal: killed`, that's Ollama's model
+# process getting OOM-killed by Docker, not a bug here. The default model
+# (llama3.2:3b) needs roughly 2-3GB RAM, chosen specifically to be lighter
+# than llama3.1:8b (~5-6GB) and reduce the odds of this happening -- but if
+# you're still seeing it, raise Docker Desktop's memory limit (Settings >
+# Resources > Memory, at least 6-8GB total recommended for the whole
+# stack), or drop to an even smaller model like llama3.2:1b.
+#
+# Set SIMULATION_BACKEND=mock in backend/.env if you'd rather skip
+# EnergyPlus entirely for a first run.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    # Pull your model once with: docker compose exec ollama ollama pull llama3.2:3b
+
+  backend:
+    platform: linux/amd64
+    build:
+      context: ./backend
+    depends_on:
+      - ollama
+    environment:
+      LLM_BASE_URL: http://ollama:11434/v1
+      LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
+      SIMULATION_BACKEND: ${SIMULATION_BACKEND:-energyplus}
+      ENERGYPLUS_INSTALL_DIR: /usr/local/EnergyPlus-26-1-0
+      IDF_PATH: models/small_office.idf
+      # Bundled Bengaluru weather file (climate-morphed near-term
+      # projection -- see backend/models/weather/README.md for exactly
+      # what it is and where it's from). Override via EPW_PATH in
+      # backend/.env for a different site or a strict current-TMY file.
+      EPW_PATH: ${EPW_PATH:-models/weather/bengaluru.epw}
+      OUTPUT_DIR: /tmp/ecoloop_runs
+      SUPABASE_URL: ${VITE_SUPABASE_URL}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM node:20-slim AS build
+        WORKDIR /app
+        ARG VITE_SUPABASE_URL
+        ARG VITE_SUPABASE_ANON_KEY
+        ENV VITE_SUPABASE_URL=$${VITE_SUPABASE_URL}
+        ENV VITE_SUPABASE_ANON_KEY=$${VITE_SUPABASE_ANON_KEY}
+        COPY package.json package-lock.json ./
+        RUN npm ci
+        COPY . .
+        RUN npm run build
+
+        FROM node:20-slim
+        WORKDIR /app
+        RUN npm install -g serve
+        COPY --from=build /app/dist ./dist
+        CMD ["serve", "-s", "dist", "-l", "5173"]
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+    ports:
+      - "5173:5173"
+
+volumes:
+  ollama_models:

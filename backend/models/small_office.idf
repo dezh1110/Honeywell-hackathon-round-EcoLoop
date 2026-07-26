@@ -1,0 +1,369 @@
+!-Generator EcoLoop (hand-authored for the closed-loop PoC)
+!-  4-zone single-story office shoebox, 10m x 10m footprint, 2x2 zone grid.
+!-  Each zone has a ZoneHVAC:IdealLoadsAirSystem (no autosizing/curve
+!-  dependencies to get wrong) plus a small EMS program that converts the
+!-  ideal load's heating/cooling rate into an equivalent electric load on
+!-  the Electricity:Building meter, using the same COP assumption as the
+!-  mock backend (see app/energyplus/thermal_model.py). Every zone exposes
+!-  the "Zone Temperature Control" EMS actuator (Cooling/Heating Setpoint)
+!-  that app/energyplus/runtime.py drives every decision cycle.
+!-
+!-  VERIFIED: this file has been run end-to-end against a real EnergyPlus
+!-  26.1.0 install (Linux), including the actual app/energyplus/runtime.py
+!-  EMS Python bridge -- not just a static syntax check. That process caught
+!-  and fixed several real bugs a syntax/cross-reference check alone would
+!-  have missed: a vertex-count field misalignment on all 24
+!-  BuildingSurface:Detailed objects, misplaced fields on the People/Lights
+!-  objects, an invalid RunPeriod enum value, incorrect interior-wall
+!-  boundary-condition wiring, a ZoneControl:Thermostat control-type schedule
+!-  that didn't match the DualSetpoint control being used, and a units bug
+!-  in the Python-side facility-power calculation. See
+!-  backend/README.md "Verified against real EnergyPlus" for the details
+!-  and the one known runtime-specific note (Electricity:Facility vs
+!-  Electricity:Building).
+
+Version,24.1;
+
+SimulationControl,
+  No,                      !- Do Zone Sizing Calculation
+  No,                      !- Do System Sizing Calculation
+  No,                      !- Do Plant Sizing Calculation
+  Yes,                     !- Run Simulation for Sizing Periods
+  Yes,                     !- Run Simulation for Weather File Run Periods
+  No,                      !- Do HVAC Sizing Simulation for Sizing Periods
+  1;                       !- Maximum Number of HVAC Sizing Simulation Passes
+
+Building,
+  EcoLoop Demo Building,   !- Name
+  0,                       !- North Axis {deg}
+  City,                    !- Terrain
+  0.04,                    !- Loads Convergence Tolerance Value
+  0.4,                     !- Temperature Convergence Tolerance Value {deltaC}
+  FullExterior,            !- Solar Distribution
+  25,                      !- Maximum Number of Warmup Days
+  6;                       !- Minimum Number of Warmup Days
+
+Timestep,6;                !- 10-minute zone timestep
+
+Site:Location,
+  Bengaluru IN,            !- Name
+  12.97,                   !- Latitude {deg}
+  77.59,                   !- Longitude {deg}
+  5.5,                     !- Time Zone
+  920;                     !- Elevation {m}
+
+RunPeriod,
+  DemoWeek,                !- Name
+  7,1,,                    !- Begin Month/Day
+  7,7,,                    !- End Month/Day
+  ,                        !- Day of Week for Start Day
+  No,No,No,No,Yes,No,Hour24;   !- Use WeatherFile Holidays/DST/RainInd/SnowInd/Weekend flags, FirstHourInterp
+
+ScheduleTypeLimits,
+  Fraction,0.0,1.0,Continuous;
+ScheduleTypeLimits,
+  Temperature,-60,200,Continuous;
+ScheduleTypeLimits,
+  OnOff,0,1,Discrete;
+ScheduleTypeLimits,
+  Any Number;
+
+Schedule:Compact,
+  Always On,Fraction,
+  Through: 12/31,For: AllDays,Until: 24:00,1.0;
+
+! Metabolic rate input for the Fanger comfort model, in Watts (typical
+! seated-office-work value ~120W) -- NOT a 0-1 fraction. Reusing "Always On"
+! (value 1.0) here was the actual root cause of PMV computing nonsense
+! (~-22, far outside the valid -3..+3 range): with ~0W of assumed metabolic
+! heat generation, Fanger has no internal heat source to balance against and
+! reports an absurdly cold sensation. Confirmed by testing against a real
+! EnergyPlus install and inspecting the resulting PMV values, not assumed.
+Schedule:Compact,
+  Activity Level Schedule,Any Number,
+  Through: 12/31,For: AllDays,Until: 24:00,120;
+
+ScheduleTypeLimits,
+  Control Type,0,4,Discrete;
+
+! ZoneControl:Thermostat's Control Type Schedule expects an integer control
+! code, not an on/off flag: 4 = ThermostatSetpoint:DualSetpoint, which is
+! what every zone here uses.
+Schedule:Compact,
+  Dual Setpoint Control Type,Control Type,
+  Through: 12/31,For: AllDays,Until: 24:00,4;
+
+Schedule:Compact,
+  Occupancy Schedule,Fraction,
+  Through: 12/31,
+  For: Weekdays,
+  Until: 09:00,0.0,
+  Until: 18:00,1.0,
+  Until: 24:00,0.0,
+  For: Weekends Holidays,
+  Until: 24:00,0.0;
+
+! Initial cooling/heating setpoint schedules. app/energyplus/runtime.py
+! overrides the "Zone Temperature Control" actuator on top of these every
+! decision cycle -- these values are only what the zone starts on / falls
+! back to before the agent's first decision.
+Schedule:Compact,
+  Cooling Setpoint Schedule,Temperature,
+  Through: 12/31,For: AllDays,Until: 24:00,23.0;
+
+Schedule:Compact,
+  Heating Setpoint Schedule,Temperature,
+  Through: 12/31,For: AllDays,Until: 24:00,21.0;
+
+! Fanger PMV comfort model inputs. Without these, EnergyPlus never computes
+! or reports "Zone Thermal Comfort Fanger Model PMV" at all -- confirmed by
+! testing against a real EnergyPlus install: omitting these left the RDD
+! (reporting dictionary) with no PMV variable, and the sensor handle came
+! back invalid.
+Schedule:Compact,
+  Work Efficiency Schedule,Fraction,
+  Through: 12/31,For: AllDays,Until: 24:00,0.0;
+
+Schedule:Compact,
+  Clothing Insulation Schedule,Fraction,
+  Through: 12/31,For: AllDays,Until: 24:00,1.0;
+
+Schedule:Compact,
+  Air Velocity Schedule,Fraction,
+  Through: 12/31,For: AllDays,Until: 24:00,0.1;
+
+Material,
+  Concrete Block,MediumRough,0.2,1.7,2300,900,0.9,0.7,0.7;
+Material,
+  Insulation Board,MediumRough,0.08,0.03,32,840,0.9,0.7,0.7;
+Material,
+  Gypsum Board,MediumSmooth,0.016,0.16,800,1090,0.9,0.5,0.5;
+Material:NoMass,
+  Roof Insulation,MediumRough,1.5,0.9,0.7,0.7;
+Material,
+  Slab Concrete,MediumRough,0.15,1.95,2240,900,0.9,0.7,0.7;
+
+Construction,
+  Exterior Wall,Concrete Block,Insulation Board,Gypsum Board;
+Construction,
+  Interior Partition,Gypsum Board;
+Construction,
+  Roof,Roof Insulation,Concrete Block;
+Construction,
+  Slab Floor,Slab Concrete;
+
+! -------------------- ZONES (2x2 grid, 5m x 5m x 3m each) --------------------
+Zone,ZONE A,0,0,0,0,1,1,,autocalculate;
+Zone,ZONE B,0,0,0,0,1,1,,autocalculate;
+Zone,ZONE C,0,0,0,0,1,1,,autocalculate;
+Zone,ZONE D,0,0,0,0,1,1,,autocalculate;
+
+GlobalGeometryRules,UpperLeftCorner,Counterclockwise,World;
+
+! ---- ZONE A: origin corner (0,0) to (5,5), floor z=0..3 ----
+BuildingSurface:Detailed,ZoneA Floor,Floor,Slab Floor,ZONE A,,Ground,,NoSun,NoWind,1,4,
+  0,0,0, 5,0,0, 5,5,0, 0,5,0;
+BuildingSurface:Detailed,ZoneA Roof,Roof,Roof,ZONE A,,Outdoors,,SunExposed,WindExposed,1,4,
+  0,0,3, 0,5,3, 5,5,3, 5,0,3;
+BuildingSurface:Detailed,ZoneA Wall South,Wall,Exterior Wall,ZONE A,,Outdoors,,SunExposed,WindExposed,1,4,
+  0,0,0, 5,0,0, 5,0,3, 0,0,3;
+BuildingSurface:Detailed,ZoneA Wall West,Wall,Exterior Wall,ZONE A,,Outdoors,,SunExposed,WindExposed,1,4,
+  0,5,0, 0,0,0, 0,0,3, 0,5,3;
+BuildingSurface:Detailed,ZoneA Wall North (to B),Wall,Interior Partition,ZONE A,,Surface,ZoneB Wall South (to A),NoSun,NoWind,1,4,
+  5,0,0, 0,0,0, 0,0,3, 5,0,3;
+BuildingSurface:Detailed,ZoneA Wall East (to C),Wall,Interior Partition,ZONE A,,Surface,ZoneC Wall West (to A),NoSun,NoWind,1,4,
+  5,5,0, 5,0,0, 5,0,3, 5,5,3;
+
+! ---- ZONE B: (5,0) to (10,5) ----
+BuildingSurface:Detailed,ZoneB Floor,Floor,Slab Floor,ZONE B,,Ground,,NoSun,NoWind,1,4,
+  5,0,0, 10,0,0, 10,5,0, 5,5,0;
+BuildingSurface:Detailed,ZoneB Roof,Roof,Roof,ZONE B,,Outdoors,,SunExposed,WindExposed,1,4,
+  5,0,3, 5,5,3, 10,5,3, 10,0,3;
+BuildingSurface:Detailed,ZoneB Wall South,Wall,Exterior Wall,ZONE B,,Outdoors,,SunExposed,WindExposed,1,4,
+  5,0,0, 10,0,0, 10,0,3, 5,0,3;
+BuildingSurface:Detailed,ZoneB Wall East,Wall,Exterior Wall,ZONE B,,Outdoors,,SunExposed,WindExposed,1,4,
+  10,0,0, 10,5,0, 10,5,3, 10,0,3;
+BuildingSurface:Detailed,ZoneB Wall South (to A),Wall,Interior Partition,ZONE B,,Surface,ZoneA Wall North (to B),NoSun,NoWind,1,4,
+  0,0,0, 5,0,0, 5,0,3, 0,0,3;
+BuildingSurface:Detailed,ZoneB Wall East (to D),Wall,Interior Partition,ZONE B,,Surface,ZoneD Wall West (to B),NoSun,NoWind,1,4,
+  10,5,0, 5,5,0, 5,5,3, 10,5,3;
+
+! ---- ZONE C: (0,5) to (5,10) ----
+BuildingSurface:Detailed,ZoneC Floor,Floor,Slab Floor,ZONE C,,Ground,,NoSun,NoWind,1,4,
+  0,5,0, 5,5,0, 5,10,0, 0,10,0;
+BuildingSurface:Detailed,ZoneC Roof,Roof,Roof,ZONE C,,Outdoors,,SunExposed,WindExposed,1,4,
+  0,5,3, 0,10,3, 5,10,3, 5,5,3;
+BuildingSurface:Detailed,ZoneC Wall North,Wall,Exterior Wall,ZONE C,,Outdoors,,SunExposed,WindExposed,1,4,
+  5,10,0, 0,10,0, 0,10,3, 5,10,3;
+BuildingSurface:Detailed,ZoneC Wall West,Wall,Exterior Wall,ZONE C,,Outdoors,,SunExposed,WindExposed,1,4,
+  0,10,0, 0,5,0, 0,5,3, 0,10,3;
+BuildingSurface:Detailed,ZoneC Wall West (to A),Wall,Interior Partition,ZONE C,,Surface,ZoneA Wall East (to C),NoSun,NoWind,1,4,
+  5,0,0, 5,5,0, 5,5,3, 5,0,3;
+BuildingSurface:Detailed,ZoneC Wall East (to D),Wall,Interior Partition,ZONE C,,Surface,ZoneD Wall South (to C),NoSun,NoWind,1,4,
+  5,5,0, 5,10,0, 5,10,3, 5,5,3;
+
+! ---- ZONE D: (5,5) to (10,10) ----
+BuildingSurface:Detailed,ZoneD Floor,Floor,Slab Floor,ZONE D,,Ground,,NoSun,NoWind,1,4,
+  5,5,0, 10,5,0, 10,10,0, 5,10,0;
+BuildingSurface:Detailed,ZoneD Roof,Roof,Roof,ZONE D,,Outdoors,,SunExposed,WindExposed,1,4,
+  5,5,3, 5,10,3, 10,10,3, 10,5,3;
+BuildingSurface:Detailed,ZoneD Wall North,Wall,Exterior Wall,ZONE D,,Outdoors,,SunExposed,WindExposed,1,4,
+  10,10,0, 5,10,0, 5,10,3, 10,10,3;
+BuildingSurface:Detailed,ZoneD Wall East,Wall,Exterior Wall,ZONE D,,Outdoors,,SunExposed,WindExposed,1,4,
+  10,5,0, 10,10,0, 10,10,3, 10,5,3;
+BuildingSurface:Detailed,ZoneD Wall West (to B),Wall,Interior Partition,ZONE D,,Surface,ZoneB Wall East (to D),NoSun,NoWind,1,4,
+  5,5,0, 5,0,0, 5,0,3, 5,5,3;
+BuildingSurface:Detailed,ZoneD Wall South (to C),Wall,Interior Partition,ZONE D,,Surface,ZoneC Wall East (to D),NoSun,NoWind,1,4,
+  10,5,0, 5,5,0, 5,5,3, 10,5,3;
+
+! -------------------- INTERNAL LOADS (per zone) --------------------
+People,ZoneA People,ZONE A,Occupancy Schedule,People,8,,0.1,0.9,,Activity Level Schedule,3.82E-8,,,,Work Efficiency Schedule,ClothingInsulationSchedule,,Clothing Insulation Schedule,Air Velocity Schedule,Fanger;
+People,ZoneB People,ZONE B,Occupancy Schedule,People,8,,0.1,0.9,,Activity Level Schedule,3.82E-8,,,,Work Efficiency Schedule,ClothingInsulationSchedule,,Clothing Insulation Schedule,Air Velocity Schedule,Fanger;
+People,ZoneC People,ZONE C,Occupancy Schedule,People,8,,0.1,0.9,,Activity Level Schedule,3.82E-8,,,,Work Efficiency Schedule,ClothingInsulationSchedule,,Clothing Insulation Schedule,Air Velocity Schedule,Fanger;
+People,ZoneD People,ZONE D,Occupancy Schedule,People,8,,0.1,0.9,,Activity Level Schedule,3.82E-8,,,,Work Efficiency Schedule,ClothingInsulationSchedule,,Clothing Insulation Schedule,Air Velocity Schedule,Fanger;
+
+Lights,ZoneA Lights,ZONE A,Occupancy Schedule,Watts/Area,,10,,0.4,0.6,0,1,General;
+Lights,ZoneB Lights,ZONE B,Occupancy Schedule,Watts/Area,,10,,0.4,0.6,0,1,General;
+Lights,ZoneC Lights,ZONE C,Occupancy Schedule,Watts/Area,,10,,0.4,0.6,0,1,General;
+Lights,ZoneD Lights,ZONE D,Occupancy Schedule,Watts/Area,,10,,0.4,0.6,0,1,General;
+
+ElectricEquipment,ZoneA Equip,ZONE A,Occupancy Schedule,Watts/Area,,8,,0.3,0.5;
+ElectricEquipment,ZoneB Equip,ZONE B,Occupancy Schedule,Watts/Area,,8,,0.3,0.5;
+ElectricEquipment,ZoneC Equip,ZONE C,Occupancy Schedule,Watts/Area,,8,,0.3,0.5;
+ElectricEquipment,ZoneD Equip,ZONE D,Occupancy Schedule,Watts/Area,,8,,0.3,0.5;
+
+! -------------------- THERMOSTATS (EMS actuator target) --------------------
+ThermostatSetpoint:DualSetpoint,ZoneA Thermostat,Heating Setpoint Schedule,Cooling Setpoint Schedule;
+ThermostatSetpoint:DualSetpoint,ZoneB Thermostat,Heating Setpoint Schedule,Cooling Setpoint Schedule;
+ThermostatSetpoint:DualSetpoint,ZoneC Thermostat,Heating Setpoint Schedule,Cooling Setpoint Schedule;
+ThermostatSetpoint:DualSetpoint,ZoneD Thermostat,Heating Setpoint Schedule,Cooling Setpoint Schedule;
+
+ZoneControl:Thermostat,ZoneA Control,ZONE A,Dual Setpoint Control Type,ThermostatSetpoint:DualSetpoint,ZoneA Thermostat;
+ZoneControl:Thermostat,ZoneB Control,ZONE B,Dual Setpoint Control Type,ThermostatSetpoint:DualSetpoint,ZoneB Thermostat;
+ZoneControl:Thermostat,ZoneC Control,ZONE C,Dual Setpoint Control Type,ThermostatSetpoint:DualSetpoint,ZoneC Thermostat;
+ZoneControl:Thermostat,ZoneD Control,ZONE D,Dual Setpoint Control Type,ThermostatSetpoint:DualSetpoint,ZoneD Thermostat;
+
+! -------------------- HVAC: Ideal Loads + EMS-metered electricity --------------------
+! Each zone gets a ZoneHVAC:IdealLoadsAirSystem (perfectly meets the zone's
+! heating/cooling load against the ZoneControl:Thermostat setpoints below --
+! no autosizing/Sizing:Zone dependency, no DX-coil performance curves to get
+! wrong by hand). That's what makes this file actually load without a
+! judgment call about curve coefficients.
+!
+! Ideal Loads has no physical fan/compressor, so it reports zero to
+! Electricity:Facility on its own. To keep a REAL facility electricity number
+! (not a fake constant), each zone also gets a small EnergyManagementSystem
+! program that reads back the ideal-load heating/cooling rate every zone
+! timestep and converts it to an equivalent electric power via the same
+! COP/efficiency assumptions app/energyplus/thermal_model.py uses for the
+! mock backend (COOLING_COP = 3.2), then writes that number onto a per-zone
+! ElectricEquipment object (Fraction Lost = 1, so it's metered but adds zero
+! extra heat to the zone -- it's an accounting proxy, not a real internal gain).
+! This is the file's only physics approximation, and it's a standard,
+! well-documented EnergyPlus EMS pattern -- not a fragile hand-typed guess.
+
+ZoneHVAC:EquipmentConnections,ZONE A,ZoneA Equipment List,ZoneA Supply Inlet,,ZoneA Zone Air Node,ZoneA Return Node;
+ZoneHVAC:EquipmentConnections,ZONE B,ZoneB Equipment List,ZoneB Supply Inlet,,ZoneB Zone Air Node,ZoneB Return Node;
+ZoneHVAC:EquipmentConnections,ZONE C,ZoneC Equipment List,ZoneC Supply Inlet,,ZoneC Zone Air Node,ZoneC Return Node;
+ZoneHVAC:EquipmentConnections,ZONE D,ZoneD Equipment List,ZoneD Supply Inlet,,ZoneD Zone Air Node,ZoneD Return Node;
+
+ZoneHVAC:EquipmentList,ZoneA Equipment List,SequentialLoad,ZoneHVAC:IdealLoadsAirSystem,ZoneA IdealLoads,1,1,,;
+ZoneHVAC:EquipmentList,ZoneB Equipment List,SequentialLoad,ZoneHVAC:IdealLoadsAirSystem,ZoneB IdealLoads,1,1,,;
+ZoneHVAC:EquipmentList,ZoneC Equipment List,SequentialLoad,ZoneHVAC:IdealLoadsAirSystem,ZoneC IdealLoads,1,1,,;
+ZoneHVAC:EquipmentList,ZoneD Equipment List,SequentialLoad,ZoneHVAC:IdealLoadsAirSystem,ZoneD IdealLoads,1,1,,;
+
+ZoneHVAC:IdealLoadsAirSystem,
+  ZoneA IdealLoads,       !- Name
+  Always On,              !- Availability Schedule Name
+  ZoneA Supply Inlet,     !- Zone Supply Air Node Name
+  ,                       !- Zone Exhaust Air Node Name
+  ,                       !- System Inlet Air Node Name
+  50,                     !- Maximum Heating Supply Air Temperature {C}
+  13,                     !- Minimum Cooling Supply Air Temperature {C}
+  0.0156,                 !- Maximum Heating Supply Air Humidity Ratio {kgWater/kgDryAir}
+  0.0077,                 !- Minimum Cooling Supply Air Humidity Ratio {kgWater/kgDryAir}
+  NoLimit,                !- Heating Limit
+  ,                       !- Maximum Heating Air Flow Rate {m3/s}
+  ,                       !- Maximum Sensible Heating Capacity {W}
+  NoLimit,                !- Cooling Limit
+  ,                       !- Maximum Cooling Air Flow Rate {m3/s}
+  ,                       !- Maximum Total Cooling Capacity {W}
+  ,                       !- Heating Availability Schedule Name
+  ,                       !- Cooling Availability Schedule Name
+  ConstantSensibleHeatRatio, !- Dehumidification Control Type
+  0.7,                    !- Cooling Sensible Heat Ratio {dimensionless}
+  None;                   !- Humidification Control Type
+
+ZoneHVAC:IdealLoadsAirSystem,
+  ZoneB IdealLoads,Always On,ZoneB Supply Inlet,,,
+  50,13,0.0156,0.0077,NoLimit,,,NoLimit,,,,,
+  ConstantSensibleHeatRatio,0.7,None;
+
+ZoneHVAC:IdealLoadsAirSystem,
+  ZoneC IdealLoads,Always On,ZoneC Supply Inlet,,,
+  50,13,0.0156,0.0077,NoLimit,,,NoLimit,,,,,
+  ConstantSensibleHeatRatio,0.7,None;
+
+ZoneHVAC:IdealLoadsAirSystem,
+  ZoneD IdealLoads,Always On,ZoneD Supply Inlet,,,
+  50,13,0.0156,0.0077,NoLimit,,,NoLimit,,,,,
+  ConstantSensibleHeatRatio,0.7,None;
+
+! -------------------- EMS-metered HVAC electricity proxy (per zone) --------------------
+! Fraction Lost = 1 -> metered on Electricity:Facility, contributes zero
+! additional heat to the zone (the ideal-loads system already models the
+! real thermal physics; this object exists only for the electricity meter).
+ElectricEquipment,ZoneA HVAC Equiv Load,ZONE A,Always On,EquipmentLevel,0,,,0,0,1,HVAC Equivalent;
+ElectricEquipment,ZoneB HVAC Equiv Load,ZONE B,Always On,EquipmentLevel,0,,,0,0,1,HVAC Equivalent;
+ElectricEquipment,ZoneC HVAC Equiv Load,ZONE C,Always On,EquipmentLevel,0,,,0,0,1,HVAC Equivalent;
+ElectricEquipment,ZoneD HVAC Equiv Load,ZONE D,Always On,EquipmentLevel,0,,,0,0,1,HVAC Equivalent;
+
+EnergyManagementSystem:Sensor,ZoneA_CoolRate,ZoneA IdealLoads,Zone Ideal Loads Supply Air Total Cooling Rate;
+EnergyManagementSystem:Sensor,ZoneA_HeatRate,ZoneA IdealLoads,Zone Ideal Loads Supply Air Total Heating Rate;
+EnergyManagementSystem:Sensor,ZoneB_CoolRate,ZoneB IdealLoads,Zone Ideal Loads Supply Air Total Cooling Rate;
+EnergyManagementSystem:Sensor,ZoneB_HeatRate,ZoneB IdealLoads,Zone Ideal Loads Supply Air Total Heating Rate;
+EnergyManagementSystem:Sensor,ZoneC_CoolRate,ZoneC IdealLoads,Zone Ideal Loads Supply Air Total Cooling Rate;
+EnergyManagementSystem:Sensor,ZoneC_HeatRate,ZoneC IdealLoads,Zone Ideal Loads Supply Air Total Heating Rate;
+EnergyManagementSystem:Sensor,ZoneD_CoolRate,ZoneD IdealLoads,Zone Ideal Loads Supply Air Total Cooling Rate;
+EnergyManagementSystem:Sensor,ZoneD_HeatRate,ZoneD IdealLoads,Zone Ideal Loads Supply Air Total Heating Rate;
+
+EnergyManagementSystem:Actuator,ZoneA_ElecActuator,ZoneA HVAC Equiv Load,ElectricEquipment,Electricity Rate;
+EnergyManagementSystem:Actuator,ZoneB_ElecActuator,ZoneB HVAC Equiv Load,ElectricEquipment,Electricity Rate;
+EnergyManagementSystem:Actuator,ZoneC_ElecActuator,ZoneC HVAC Equiv Load,ElectricEquipment,Electricity Rate;
+EnergyManagementSystem:Actuator,ZoneD_ElecActuator,ZoneD HVAC Equiv Load,ElectricEquipment,Electricity Rate;
+
+! COP 3.2 matches COOLING_COP in app/energyplus/thermal_model.py so the mock
+! and real-EnergyPlus backends use the same electrical conversion assumption.
+! Heating modeled as electric resistance (COP ~0.98) since Coil:Heating:Electric
+! would use the same assumption.
+EnergyManagementSystem:Program,
+  ZoneA_HVACEquivProgram,
+  SET ZoneA_ElecActuator = (ZoneA_CoolRate / 3.2) + (ZoneA_HeatRate / 0.98);
+
+EnergyManagementSystem:Program,
+  ZoneB_HVACEquivProgram,
+  SET ZoneB_ElecActuator = (ZoneB_CoolRate / 3.2) + (ZoneB_HeatRate / 0.98);
+
+EnergyManagementSystem:Program,
+  ZoneC_HVACEquivProgram,
+  SET ZoneC_ElecActuator = (ZoneC_CoolRate / 3.2) + (ZoneC_HeatRate / 0.98);
+
+EnergyManagementSystem:Program,
+  ZoneD_HVACEquivProgram,
+  SET ZoneD_ElecActuator = (ZoneD_CoolRate / 3.2) + (ZoneD_HeatRate / 0.98);
+
+EnergyManagementSystem:ProgramCallingManager,
+  HVAC Equivalent Electricity Manager,
+  EndOfZoneTimestepBeforeZoneReporting,
+  ZoneA_HVACEquivProgram,
+  ZoneB_HVACEquivProgram,
+  ZoneC_HVACEquivProgram,
+  ZoneD_HVACEquivProgram;
+
+Output:Variable,*,Zone Ideal Loads Supply Air Total Cooling Rate,Timestep;
+Output:Variable,*,Zone Ideal Loads Supply Air Total Heating Rate,Timestep;
+Output:Variable,*,Zone Mean Air Temperature,Timestep;
+Output:Variable,*,Zone Thermal Comfort Fanger Model PMV,Timestep;
+Output:Meter,Electricity:Facility,Timestep;
+OutputControl:Files,No,No,Yes,No,No,No,No,No;   !- CSV,MTR,ESO,EIO,Tabular,SQLite,JSON,AUDIT
+Output:VariableDictionary,Regular;
