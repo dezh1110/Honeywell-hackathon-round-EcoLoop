@@ -84,6 +84,7 @@ built around the "Eco-Loop Building Agents" hackathon spec.
 
   bash
   chmod +x run.sh
+  
   ./run.sh
 
   Then open a second terminal in the same folder and run:
