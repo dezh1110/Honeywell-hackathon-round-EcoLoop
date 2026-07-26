@@ -41,36 +41,6 @@ built around the "Eco-Loop Building Agents" hackathon spec.
 - `docker-compose.yml` — runs the dashboard, the backend agent, and a local
   Ollama instance together.
 
-## Running everything
-
-**Before you start: give Docker Desktop enough memory.** Settings → Resources
-→ Memory, at least 6-8GB for the whole stack (EnergyPlus + Ollama +
-dashboard build). Too little and Ollama's model process gets OOM-killed
-mid-run — the agent handles that gracefully rather than crashing, but it's
-better avoided.
-
-1. Create a Supabase project; run **all four migration files**, in order:
-   `supabase/migrations/*.sql`, then the three files under
-   `backend/supabase/migrations/*.sql` in filename order.
-2. Copy `.env.example` to `.env` at the repo root (not just `backend/.env`)
-   with `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
-   `SUPABASE_SERVICE_KEY`, and `SIMULATION_BACKEND`. **This root `.env` is
-   what `docker-compose.yml` actually reads for `SIMULATION_BACKEND`** —
-   editing `backend/.env` alone won't change it for the Docker path, since
-   `docker-compose.yml`'s `environment:` block overrides it.
-3. Also copy `backend/.env.example` to `backend/.env` (Compose passes this
-   in via `env_file`, and it's also what a non-Docker local run uses).
-4. `docker compose up --build` — starts Ollama, the backend agent (real
-   EnergyPlus by default; see `backend/README.md` for what that involves),
-   and the dashboard on http://localhost:5173.
-5. `docker compose exec ollama ollama pull llama3.2:3b` (first run only,
-   matches the default `LLM_MODEL` — pulling a different model without
-   also setting `LLM_MODEL` to match will just trade one error for
-   another), then `docker compose restart backend` so it picks up the model.
-
-
-Or run each piece locally without Docker — `npm run dev` for the dashboard,
-`python -m app.main` for the backend (see `backend/README.md`).
 
 ### Troubleshooting the Docker path (found by actually running it)
 
