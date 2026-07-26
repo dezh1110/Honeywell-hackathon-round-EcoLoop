@@ -76,6 +76,26 @@ built around the "Eco-Loop Building Agents" hackathon spec.
   GRANT SELECT, INSERT, UPDATE, DELETE ON public.nlp_queries TO service_role;
   GRANT SELECT, INSERT, UPDATE, DELETE ON public.whatif_requests TO service_role;
   ```
+  ##demo video
+  https://www.loom.com/share/c9c02c63ed454343b81bde2d631ebb3d
+
+  ## execution steps!!
+  Run this in one terminal:
+
+  bash
+  chmod +x run.sh
+  ./run.sh
+
+  Then open a second terminal in the same folder and run:
+
+  bash
+  ./run.sh exec ollama ollama pull llama3.2:3b
+  ./run.sh restart backend
+
+  Then open:
+  http://localhost:5173
+
+If step 1 hangs pulling the ollama/ollama:latest image, that's a Docker Hub network issue on your machine, not the project — retry, or restart Docker Desktop and try again.
 
 ## What's real vs. what's a documented stand-in
 
