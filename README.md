@@ -83,6 +83,7 @@ built around the "Eco-Loop Building Agents" hackathon spec.
   Run this in one terminal:
 
   bash
+  
   chmod +x run.sh
   
   ./run.sh
